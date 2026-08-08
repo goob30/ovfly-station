@@ -39,7 +39,7 @@ bool waitForString(const char *expected, uint32_t timeout_ms) { // yo what thte 
     TickType_t start = xTaskGetTickCount();
  
     while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(timeout_ms)) {
-        int n = read_serial(chunk, sizeof(chunk) - 1);
+        int n = readSerial(chunk, sizeof(chunk) - 1);
         if (n > 0 && buffer_len + n < sizeof(buffer)) {
             memcpy(buffer + buffer_len, chunk, n);
             buffer_len += n;
@@ -66,18 +66,12 @@ void waitForInitAck(void) {
 }
 
 // BAS_ACK is an ack message from the base, while STA_ACK is an ack from the station esp32
-bool isSentMessageAcknowledged(uint8_t *data, size_t len, DataType type) {
-    if (!waitForString("BAS_ACK", 500)) {
-        ESP_LOGW("serialHandler", "Previous message timing out...");
-        if (!waitForString("BAS_ACK", 500)) {
-            ESP_LOGW("serialHandler", "Previous message timed out!");
-        }
-    } else if (waitForString("BAS_ACK", 500)) {
+bool isSentMessageAcknowledged(void) {
+    if (waitForString("BAS_ACK", 500)) {
         return true;
     }
     return false;
 }
-
 
 /*
     data structure to base:
@@ -87,13 +81,33 @@ bool isSentMessageAcknowledged(uint8_t *data, size_t len, DataType type) {
 */
 // todo: maybe recursively send every x ms while isSentMessageAcknowledged is false
 
-void sendDataFrame(uint8_t *data, size_t len, DataType type) {
+const int DFRAME_BUFFER = 49;
+
+void createDataFrame(char *out, size_t out_size, uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
+    snprintf(out, out_size, "STA_DATA:AIL%u:ELV%u:THR%u:BAT%u:STA_EOF", ail, elv, thr, bat);
+}
+
+void sendDataFrame(uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
+    char frame[DFRAME_BUFFER];
     if (waitForString("BAS_EOF", 500)) { // checks if an incoming EOF was sent (checking for ACK might clash with the incoming data as ACK is always before the frame)
-        writeSerial("STA_ACK", strlen("STA_ACK"), DATA_TYPE_STR);
-        writeSerial("STA_DATA:AIL32767:ELV32767:THR128:BAT1168:STA_EOF", 49, DATA_TYPE_DATA);
+        if(isSentMessageAcknowledged()) { // ACK is sent after a successful read
+            createDataFrame(frame, sizeof(frame), ail, elv, thr, bat);
+            writeSerial(frame,  strlen(frame), DATA_TYPE_DATA);
+        } else {return;}
+        
     }
 }
 
+// todo: make an array or something in dataHandler which stores the values sent and received
+void readDataFrame(void) {
+    char frame[DFRAME_BUFFER];
+    if (isSentMessageAcknowledged()) {
+        if (waitForString("BAS_DATA", 500)) {
+            readSerial(frame, DFRAME_BUFFER);
+            writeSerial("STA_ACK", strlen("STA_ACK"), DATA_TYPE_STR);
+        }
+    }
+}
 
 
 void serialTask(void *pvParameters) {
@@ -101,6 +115,8 @@ void serialTask(void *pvParameters) {
 
     waitForInitAck(); // breaks and continues task once the base's init_ack is received
 
-    
-    
+    while(1) {
+        sendDataFrame(32767, 32767, 128, 1195); // debug values
+
+    }  
 }
