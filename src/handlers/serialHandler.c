@@ -140,7 +140,7 @@ void sendDataFrame(uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
 void readDataFrame(DataFrameData *out) {
     char frame[DFRAME_BUFFER];
     if (isSentMessageAcknowledged()) {
-        if (waitForString("BAS_DATA", 500)) {
+        if (waitForString("BAS_DAT", 500)) {
             readSerial(frame, DFRAME_BUFFER);
             sscanf(frame, "BAS_DAT:AIL%u:ELV%u:THR%u:BAT%u:BAS_EOF", // splits up incoming frame from base
                     &out->ail, 
@@ -163,8 +163,5 @@ void serialTask(void *pvParameters) {
             sendAck();
             sendDataFrame(32767, 32767, 128, 1197);
         }
-
-
-
     }  
 }
