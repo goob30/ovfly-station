@@ -15,26 +15,36 @@
 bool isOwnMessageSent = false;
 bool isOwnMessageReceived = false;
 
-int writeSerial(uint8_t *data, size_t len, DataType type) {
+DataFrameData lastDFrame;
+
+// pass pointer to string, length of string and DataType
+int writeSerial(char *data, size_t len, DataType type) {
     switch (type) {
         case DATA_TYPE_STR:
-            return uart_write_bytes(UART_PORT, (const char*)data, strlen((char *) data));
+            return uart_write_bytes(UART_PORT, data, strlen(data));
         case DATA_TYPE_DATA:
-            return uart_write_bytes(UART_PORT, (const char *) data, len);
+            return uart_write_bytes(UART_PORT, data, len);
         default:
             return -1;
     }
-    return uart_write_bytes(UART_PORT, (const char *)data, len);
 }
 
-int readSerial(uint8_t *buf, size_t max_len) {
-    return uart_read_bytes(UART_PORT, buf, max_len, pdMS_TO_TICKS(10));
+
+int readSerial(char *buf, size_t maxLen) {
+    if (buf == NULL || maxLen == 0) return -1;
+    int readBytes = uart_read_bytes(UART_PORT, (uint8_t *)buf, maxLen - 1, pdMS_TO_TICKS(10));
+    if (readBytes > 0) {
+        buf[readBytes] = '\0';
+        return readBytes;
+    }
+    buf[0] = '\0';
+    return 0;
 }
 
 bool waitForString(const char *expected, uint32_t timeout_ms) { // yo what thte fuck does this function do
     char buffer[BUF_SIZE] = {0};
     size_t buffer_len = 0;
-    uint8_t chunk[64];
+    char chunk[64];
  
     TickType_t start = xTaskGetTickCount();
  
@@ -58,7 +68,7 @@ bool waitForString(const char *expected, uint32_t timeout_ms) { // yo what thte 
 void waitForInitAck(void) {
     ESP_LOGI("serialHandler", "Beginning init...");
     while (1) {
-        writeSerial((uint8_t*)"INIT_REQ", strlen("INIT_REQ"), DATA_TYPE_STR);
+        writeSerial("INIT_REQ", strlen("INIT_REQ"), DATA_TYPE_STR);
         if (waitForString("BAS_INIT_ACK", 500)) {
             return;
         }
@@ -73,38 +83,70 @@ bool isSentMessageAcknowledged(void) {
     return false;
 }
 
+void sendAck(void) {
+    writeSerial("STA_ACK", strlen("STA_ACK"), DATA_TYPE_STR);
+}
+
 /*
     data structure to base:
-    STA_DATA:AILXXXXX:ELVXXXXX:THRXXX:BATXXXX:STA_EOF
+    STA_DAT:AILXXXXX:ELVXXXXX:THRXXX:BATXXXX:STA_EOF
     init, uint16_t, uint16_t, uint8_t, [some type formatted as 12.34v], end of frame
-    49 characters
+    48 characters
 */
+
+/*
+    non data structure to base:
+    STA_NDF:XXX:MESSAGE_GOES_HERE:STA_EOF
+    XXX is the char length of the message
+    constant 20 characters
+*/
+
 // todo: maybe recursively send every x ms while isSentMessageAcknowledged is false
 
-const int DFRAME_BUFFER = 49;
+bool isDataFrameStreamInterrupt = false;
+bool readyToSendDFrame = false;
 
-void createDataFrame(char *out, size_t out_size, uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
-    snprintf(out, out_size, "STA_DATA:AIL%u:ELV%u:THR%u:BAT%u:STA_EOF", ail, elv, thr, bat);
+// out is the array of char instance in sendDataFrame, out_size is its length
+void createDataFrame(char *out, size_t out_size, uint16_t ail, uint16_t elv, uint8_t thr, float bat) {
+    snprintf(out, out_size, "STA_DAT:AIL%u:ELV%u:THR%u:BAT%u:STA_EOF", ail, elv, thr, bat);
+}
+
+void createAndQueueNonDataFrame(const char *str) {
+    isDataFrameStreamInterrupt = true;
+
+    char frame[strlen(str) + NDFRAME_BASE_BUFFER];
+    snprintf(frame, sizeof(frame), "STA_NDF:XXX:%s:STA_EOF", str);
+
+    writeSerial(frame, strlen(frame), DATA_TYPE_STR);
+    isDataFrameStreamInterrupt = false;
 }
 
 void sendDataFrame(uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
     char frame[DFRAME_BUFFER];
-    if (waitForString("BAS_EOF", 500)) { // checks if an incoming EOF was sent (checking for ACK might clash with the incoming data as ACK is always before the frame)
-        if(isSentMessageAcknowledged()) { // ACK is sent after a successful read
+    if (!isDataFrameStreamInterrupt) {
+        if (waitForString("BAS_EOF", 500)) { // checks if an incoming EOF was sent (checking for ACK might clash with the incoming data as ACK is always before the frame)
             createDataFrame(frame, sizeof(frame), ail, elv, thr, bat);
             writeSerial(frame,  strlen(frame), DATA_TYPE_DATA);
-        } else {return;}
-        
+        }
+        isDataFrameStreamInterrupt = false;
+    } else {
+        return;
     }
 }
 
 // todo: make an array or something in dataHandler which stores the values sent and received
-void readDataFrame(void) {
+
+//splits between readSerial for dframe and ndframe
+void readDataFrame(DataFrameData *out) {
     char frame[DFRAME_BUFFER];
     if (isSentMessageAcknowledged()) {
         if (waitForString("BAS_DATA", 500)) {
             readSerial(frame, DFRAME_BUFFER);
-            writeSerial("STA_ACK", strlen("STA_ACK"), DATA_TYPE_STR);
+            sscanf(frame, "BAS_DAT:AIL%u:ELV%u:THR%u:BAT%u:BAS_EOF", // splits up incoming frame from base
+                    &out->ail, 
+                    &out->elv, 
+                    &out->thr, 
+                    &out->bat);
         }
     }
 }
@@ -116,7 +158,13 @@ void serialTask(void *pvParameters) {
     waitForInitAck(); // breaks and continues task once the base's init_ack is received
 
     while(1) {
-        sendDataFrame(32767, 32767, 128, 1195); // debug values
+        if (isSentMessageAcknowledged()) {
+            readDataFrame(&lastDFrame);
+            sendAck();
+            sendDataFrame(32767, 32767, 128, 1197);
+        }
+
+
 
     }  
 }
