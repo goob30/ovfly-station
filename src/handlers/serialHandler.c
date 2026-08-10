@@ -2,6 +2,7 @@
 #include "dataHandler.h"
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>
 
 /*
     he was whipping up shit in a file, boiling shit
@@ -11,6 +12,18 @@
     in a file bro
 
 */
+
+void initUart(void) {
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity    = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    };
+    uart_param_config(UART_PORT, &uart_config);
+    uart_driver_install(UART_PORT, BUF_SIZE * 2, 0, 0, NULL, 0);
+}
 
 bool isOwnMessageSent = false;
 bool isOwnMessageReceived = false;
@@ -42,6 +55,7 @@ int readSerial(char *buf, size_t maxLen) {
 }
 
 bool waitForString(const char *expected, uint32_t timeout_ms) { // yo what thte fuck does this function do
+                                                                // it waits for a string dipshit -future jon
     char buffer[BUF_SIZE] = {0};
     size_t buffer_len = 0;
     char chunk[64];
@@ -104,11 +118,11 @@ void sendAck(void) {
 // todo: maybe recursively send every x ms while isSentMessageAcknowledged is false
 
 bool isDataFrameStreamInterrupt = false;
-bool readyToSendDFrame = false;
+bool readyToSendDFrame = false; // unused
 
 // out is the array of char instance in sendDataFrame, out_size is its length
-void createDataFrame(char *out, size_t out_size, uint16_t ail, uint16_t elv, uint8_t thr, float bat) {
-    snprintf(out, out_size, "STA_DAT:AIL%u:ELV%u:THR%u:BAT%u:STA_EOF", ail, elv, thr, bat);
+void createDataFrame(char *out, size_t out_size, uint16_t ail, uint16_t elv, uint8_t thr, uint16_t bat) {
+    snprintf(out, out_size, "STA_DAT:AIL%" PRIu16 ":ELV%" PRIu16 ":THR%" PRIu8 ":BAT%" PRIu16 ":STA_EOF", ail, elv, thr, bat);
 }
 
 void createAndQueueNonDataFrame(const char *str) {
@@ -142,7 +156,7 @@ void readDataFrame(DataFrameData *out) {
     if (isSentMessageAcknowledged()) {
         if (waitForString("BAS_DAT", 500)) {
             readSerial(frame, DFRAME_BUFFER);
-            sscanf(frame, "BAS_DAT:AIL%u:ELV%u:THR%u:BAT%u:BAS_EOF", // splits up incoming frame from base
+            sscanf(frame, "BAS_DAT:AIL%" PRIu16 ":ELV%" PRIu16 ":THR%" PRIu8 ":BAT%" PRIu16 ":BAS_EOF", // splits up incoming frame from base
                     &out->ail, 
                     &out->elv, 
                     &out->thr, 
@@ -158,10 +172,8 @@ void serialTask(void *pvParameters) {
     waitForInitAck(); // breaks and continues task once the base's init_ack is received
 
     while(1) {
-        if (isSentMessageAcknowledged()) {
-            readDataFrame(&lastDFrame);
-            sendAck();
-            sendDataFrame(32767, 32767, 128, 1197);
-        }
+        readDataFrame(&lastDFrame);
+        sendAck();
+        sendDataFrame(32767, 32767, 128, 1197);
     }  
 }
