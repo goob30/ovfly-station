@@ -28,6 +28,8 @@ void initUart(void) {
 bool isOwnMessageSent = false;
 bool isOwnMessageReceived = false;
 
+int lastBasAckTick;
+
 DataFrameData lastDFrame;
 
 // pass pointer to string, length of string and DataType
@@ -92,6 +94,7 @@ void waitForInitAck(void) {
 // BAS_ACK is an ack message from the base, while STA_ACK is an ack from the station esp32
 bool isSentMessageAcknowledged(void) {
     if (waitForString("BAS_ACK", 500)) {
+        lastBasAckTick = xTaskGetTickCount();
         return true;
     }
     return false;
@@ -165,15 +168,26 @@ void readDataFrame(DataFrameData *out) {
     }
 }
 
+bool isSerialConnectionActive(void) {
+    return (xTaskGetTickCount() - lastBasAckTick) < pdMS_TO_TICKS(2000);
+}
 
 void serialTask(void *pvParameters) {
     (void)pvParameters;
 
     waitForInitAck(); // breaks and continues task once the base's init_ack is received
 
+    lastBasAckTick = xTaskGetTickCount();
+
     while(1) {
-        readDataFrame(&lastDFrame);
-        sendAck();
-        sendDataFrame(32767, 32767, 128, 1197);
+        if (isSerialConnectionActive()) {
+            readDataFrame(&lastDFrame);
+            sendAck();
+            sendDataFrame(32767, 32767, 128, 1197);
+        } else {
+            
+            waitForInitAck();
+            lastBasAckTick = xTaskGetTickCount();
+        }
     }  
 }
