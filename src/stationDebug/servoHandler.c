@@ -1,5 +1,9 @@
+// This handler is not to be run with the Station! This is only for debugging while the Onboard
+// is unavailable.
 #include "servoHandler.h"
 #include <serialHandler.h>
+#include <dataHandler.h>
+
 
 static const ledc_timer_config_t ledcTimer = {
     .speed_mode      = LEDC_SPEED_MODE,
@@ -25,6 +29,7 @@ void initServos(void) {
     }
 }
 
+// servo id (refer to comment on servoHandler) and angle (0 to 180)
 void driveServo(int id, int angle) {
     servo_t *s = &servos[id];
 
@@ -41,11 +46,19 @@ void driveServo(int id, int angle) {
     ledc_update_duty(LEDC_SPEED_MODE, s->channel);
 }
 
-// todo: add method to convert DFrame uint to value between 0 and 180 or whatever is needed for the servo
+float mapRange(uint16_t value, uint16_t inMin, uint16_t inMax, float outMin, float outMax) {
+    return outMin + (float)(value - inMin) * (outMax - outMin) / (float)(inMax - inMin);
+}
+
+int uint16ToDegrees(uint16_t in) {
+    int out = mapRange(in, 0, 65535, 0, 180);
+    return out;
+}
+
 void servoTask(void *pvParameters) {
     (void)pvParameters;
     while (1) {
-        driveServo(0, 90);
-        vTaskDelay(pdMS_TO_TICKS(20));
+        driveServo(0, uint16ToDegrees(lastDFrame.ail)); // drive servo 0 which acts as an aileron motor
+        vTaskDelay(pdMS_TO_TICKS(20)); 
     }
 }

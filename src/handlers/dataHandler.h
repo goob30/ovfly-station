@@ -8,7 +8,7 @@ typedef struct {
     uint16_t ail;
     uint16_t elv;
     uint8_t  thr;
-    uint16_t    bat;
+    uint16_t bat;
 } DataFrameData;
 
 extern DataFrameData lastDFrame;
